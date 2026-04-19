@@ -42,9 +42,7 @@
     pointer-events: none;
     transition: background 0.5s;
   }
-  .bg-glow.danger {
-    background: radial-gradient(circle, rgba(255,26,26,0.1) 0%, transparent 70%);
-  }
+  .bg-glow.danger { background: radial-gradient(circle, rgba(255,26,26,0.1) 0%, transparent 70%); }
 
   .intro-text { text-align: center; max-width: 560px; }
   .intro-text p:first-child {
@@ -216,8 +214,7 @@
   #closePanelBtn {
     position: absolute;
     top: 1.2rem; left: 1.2rem;
-    background: none;
-    border: none;
+    background: none; border: none;
     color: var(--muted);
     font-size: 1.4rem;
     cursor: pointer;
@@ -229,29 +226,27 @@
 
   #backdrop {
     display: none;
-    position: fixed;
-    inset: 0;
+    position: fixed; inset: 0;
     background: rgba(0,0,0,0.4);
     z-index: 55;
   }
   #backdrop.show { display: block; }
 
-  .status-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--muted);
-    display: inline-block;
-    margin-right: 6px;
-    transition: background 0.3s;
-  }
-  .status-dot.connected { background: #4caf50; }
   .status-line {
     font-size: 0.65rem;
     letter-spacing: 0.1em;
     color: var(--muted);
     display: flex;
     align-items: center;
+    gap: 6px;
   }
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: #4caf50; }
 </style>
 </head>
 <body>
@@ -299,30 +294,26 @@
 
   <div id="adminControls">
     <div class="panel-title">Contrôles</div>
-    <div class="status-line"><span class="status-dot" id="statusDot"></span><span id="statusText">Connexion...</span></div>
+    <div class="status-line">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Connexion...</span>
+    </div>
     <button class="panel-btn primary" id="btnStart" onclick="adminToggle()">Démarrer</button>
     <button class="panel-btn" onclick="adminReset()">Réinitialiser</button>
   </div>
 </div>
 
 <script>
-  const SECRET  = "280598";
-  const TOTAL   = 15 * 60;
+  const SECRET         = "280598";
+  const TOTAL          = 15 * 60;
   const PUSHER_KEY     = "9a22598565bd4c97290f";
   const PUSHER_CLUSTER = "eu";
-  // ⚠️ Pour envoyer des événements depuis le navigateur, on utilise
-  // le mode client-events sur un channel de présence ou on passe par
-  // une petite API. Ici on utilise l'API REST Pusher via un proxy CORS gratuit.
-  const APP_ID  = "2143392";
-  const SECRET_KEY = "72feb77fa21aa0412a93";
-  const CHANNEL = "chrono-channel";
-  const EVENT   = "timer-event";
 
   let localInterval = null;
-  let isAdmin = false;
-  let startTs = null;   // timestamp de départ (ms)
-  let paused  = false;
-  let pausedRem = null; // secondes restantes au moment du pause
+  let isAdmin       = false;
+  let startTs       = null;
+  let paused        = false;
+  let pausedRem     = null;
 
   const display       = document.getElementById('timerDisplay');
   const fill          = document.getElementById('progressFill');
@@ -338,9 +329,27 @@
   const statusDot     = document.getElementById('statusDot');
   const statusText    = document.getElementById('statusText');
 
-  // ── Pusher setup ─────────────────────────────────────────────
-  const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
-  const channel = pusher.subscribe(CHANNEL);
+  // ── Pusher (presence channel for client events) ───────────────
+  const pusher = new Pusher(PUSHER_KEY, {
+    cluster: PUSHER_CLUSTER,
+    forceTLS: true,
+    // Presence channel auth — on utilise un token statique public
+    // car c'est un usage non-sensible (contrôle de chrono)
+    authEndpoint: null,
+    auth: { params: { user_id: Math.random().toString(36).slice(2) } },
+    userAuthentication: {
+      endpoint: '/pusher/auth',
+      transport: 'ajax'
+    },
+    channelAuthorization: {
+      endpoint: '/pusher/auth',
+      transport: 'ajax'
+    }
+  });
+
+  // On utilise un channel public avec client events activés
+  // Les client events sur channel public nécessitent le préfixe "client-"
+  const channel = pusher.subscribe('chrono-sync');
 
   pusher.connection.bind('connected', () => {
     statusDot.classList.add('connected');
@@ -350,13 +359,20 @@
     statusDot.classList.remove('connected');
     statusText.textContent = 'Déconnecté';
   });
+  pusher.connection.bind('error', (err) => {
+    console.error('Pusher error', err);
+  });
 
-  // Receive events from Pusher
-  channel.bind(EVENT, (data) => {
+  channel.bind('client-timer', (data) => {
+    handleTimerEvent(data);
+  });
+
+  function handleTimerEvent(data) {
     if (data.action === 'start') {
-      startTs    = data.startTs;
-      paused     = false;
-      pausedRem  = null;
+      startTs   = data.startTs;
+      paused    = false;
+      pausedRem = null;
+      msg.classList.remove('show');
       startLocalLoop();
       if (isAdmin) btn.textContent = 'Pause';
     } else if (data.action === 'pause') {
@@ -375,91 +391,14 @@
       msg.classList.remove('show');
       if (isAdmin) btn.textContent = 'Démarrer';
     }
-  });
-
-  // ── Send event via Pusher REST API (through allorigins CORS proxy) ──
-  async function pusherTrigger(action, extra = {}) {
-    const body = JSON.stringify({ action, ...extra });
-    const ts   = Math.floor(Date.now() / 1000);
-    const authStr = `POST\n/apps/${APP_ID}/events\n` +
-      `auth_key=${PUSHER_KEY}&auth_timestamp=${ts}&auth_version=1.0&` +
-      `body_md5=${await md5(body)}&channel=${CHANNEL}&name=${EVENT}`;
-
-    const signature = await hmacSha256(SECRET_KEY, authStr);
-
-    const url = `https://api-${PUSHER_CLUSTER}.pusher.com/apps/${APP_ID}/events?` +
-      `auth_key=${PUSHER_KEY}&auth_timestamp=${ts}&auth_version=1.0&` +
-      `body_md5=${await md5(body)}&channel=${CHANNEL}&name=${EVENT}&auth_signature=${signature}`;
-
-    try {
-      await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body
-      });
-    } catch(e) {
-      console.error('Pusher trigger error', e);
-    }
   }
 
-  // ── Crypto helpers ───────────────────────────────────────────
-  async function hmacSha256(key, data) {
-    const enc = new TextEncoder();
-    const k = await crypto.subtle.importKey('raw', enc.encode(key),
-      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const sig = await crypto.subtle.sign('HMAC', k, enc.encode(data));
-    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2,'0')).join('');
+  function sendEvent(data) {
+    // client events : canal doit être souscrit et connecté
+    channel.trigger('client-timer', data);
   }
 
-  async function md5(str) {
-    // Simple MD5 via SubtleCrypto not available — use a lightweight impl
-    return md5impl(str);
-  }
-
-  // Lightweight MD5
-  function md5impl(s) {
-    function safeAdd(x, y) { const lsw=(x&0xFFFF)+(y&0xFFFF); return (((x>>16)+(y>>16)+(lsw>>16))<<16)|(lsw&0xFFFF); }
-    function bitRotateLeft(num, cnt) { return (num<<cnt)|(num>>>(32-cnt)); }
-    function md5cmn(q,a,b,x,s,t){return safeAdd(bitRotateLeft(safeAdd(safeAdd(a,q),safeAdd(x,t)),s),b);}
-    function md5ff(a,b,c,d,x,s,t){return md5cmn((b&c)|((~b)&d),a,b,x,s,t);}
-    function md5gg(a,b,c,d,x,s,t){return md5cmn((b&d)|(c&(~d)),a,b,x,s,t);}
-    function md5hh(a,b,c,d,x,s,t){return md5cmn(b^c^d,a,b,x,s,t);}
-    function md5ii(a,b,c,d,x,s,t){return md5cmn(c^(b|(~d)),a,b,x,s,t);}
-    const ucs2decode = str => { const out=[]; for(let i=0;i<str.length;i++){let v=str.charCodeAt(i);if(v>=0xD800&&v<=0xDBFF&&i+1<str.length){const e=str.charCodeAt(i+1);if(e>=0xDC00&&e<=0xDFFF){v=0x10000+((v-0xD800)<<10)+(e-0xDC00);i++;}}out.push(v);}return out;};
-    function encUtf8(s){return unescape(encodeURIComponent(s));}
-    function strToU32(str){const buf=new Uint8Array(str.length);for(let i=0;i<str.length;i++)buf[i]=str.charCodeAt(i);const arr=new Int32Array(buf.buffer);return arr;}
-    const str8 = encUtf8(s);
-    const len8 = str8.length;
-    const M = [];
-    for(let i=0;i<len8;i++){if(!M[i>>2])M[i>>2]=0;M[i>>2]|=str8.charCodeAt(i)<<((i%4)*8);}
-    if(!M[len8>>2])M[len8>>2]=0;
-    M[len8>>2]|=0x80<<((len8%4)*8);
-    M[(((len8+64)>>>9)<<4)+14]=len8*8;
-    let a=1732584193,b=-271733879,c=-1732584194,d=271733878;
-    for(let i=0;i<M.length;i+=16){
-      const oA=a,oB=b,oC=c,oD=d;
-      a=md5ff(a,b,c,d,M[i],7,-680876936);d=md5ff(d,a,b,c,M[i+1],12,-389564586);c=md5ff(c,d,a,b,M[i+2],17,606105819);b=md5ff(b,c,d,a,M[i+3],22,-1044525330);
-      a=md5ff(a,b,c,d,M[i+4],7,-176418897);d=md5ff(d,a,b,c,M[i+5],12,1200080426);c=md5ff(c,d,a,b,M[i+6],17,-1473231341);b=md5ff(b,c,d,a,M[i+7],22,-45705983);
-      a=md5ff(a,b,c,d,M[i+8],7,1770035416);d=md5ff(d,a,b,c,M[i+9],12,-1958414417);c=md5ff(c,d,a,b,M[i+10],17,-42063);b=md5ff(b,c,d,a,M[i+11],22,-1990404162);
-      a=md5ff(a,b,c,d,M[i+12],7,1804603682);d=md5ff(d,a,b,c,M[i+13],12,-40341101);c=md5ff(c,d,a,b,M[i+14],17,-1502002290);b=md5ff(b,c,d,a,M[i+15],22,1236535329);
-      a=md5gg(a,b,c,d,M[i+1],5,-165796510);d=md5gg(d,a,b,c,M[i+6],9,-1069501632);c=md5gg(c,d,a,b,M[i+11],14,643717713);b=md5gg(b,c,d,a,M[i],20,-373897302);
-      a=md5gg(a,b,c,d,M[i+5],5,-701558691);d=md5gg(d,a,b,c,M[i+10],9,38016083);c=md5gg(c,d,a,b,M[i+15],14,-660478335);b=md5gg(b,c,d,a,M[i+4],20,-405537848);
-      a=md5gg(a,b,c,d,M[i+9],5,568446438);d=md5gg(d,a,b,c,M[i+14],9,-1019803690);c=md5gg(c,d,a,b,M[i+3],14,-187363961);b=md5gg(b,c,d,a,M[i+8],20,1163531501);
-      a=md5gg(a,b,c,d,M[i+13],5,-1444681467);d=md5gg(d,a,b,c,M[i+2],9,-51403784);c=md5gg(c,d,a,b,M[i+7],14,1735328473);b=md5gg(b,c,d,a,M[i+12],20,-1926607734);
-      a=md5hh(a,b,c,d,M[i+5],4,-378558);d=md5hh(d,a,b,c,M[i+8],11,-2022574463);c=md5hh(c,d,a,b,M[i+11],16,1839030562);b=md5hh(b,c,d,a,M[i+14],23,-35309556);
-      a=md5hh(a,b,c,d,M[i+1],4,-1530992060);d=md5hh(d,a,b,c,M[i+4],11,1272893353);c=md5hh(c,d,a,b,M[i+7],16,-155497632);b=md5hh(b,c,d,a,M[i+10],23,-1094730640);
-      a=md5hh(a,b,c,d,M[i+13],4,681279174);d=md5hh(d,a,b,c,M[i],11,-358537222);c=md5hh(c,d,a,b,M[i+3],16,-722521979);b=md5hh(b,c,d,a,M[i+6],23,76029189);
-      a=md5hh(a,b,c,d,M[i+9],4,-640364487);d=md5hh(d,a,b,c,M[i+12],11,-421815835);c=md5hh(c,d,a,b,M[i+15],16,530742520);b=md5hh(b,c,d,a,M[i+2],23,-995338651);
-      a=md5ii(a,b,c,d,M[i],6,-198630844);d=md5ii(d,a,b,c,M[i+7],10,1126891415);c=md5ii(c,d,a,b,M[i+14],15,-1416354905);b=md5ii(b,c,d,a,M[i+5],21,-57434055);
-      a=md5ii(a,b,c,d,M[i+12],6,1700485571);d=md5ii(d,a,b,c,M[i+3],10,-1894986606);c=md5ii(c,d,a,b,M[i+10],15,-1051523);b=md5ii(b,c,d,a,M[i+1],21,-2054922799);
-      a=md5ii(a,b,c,d,M[i+8],6,1873313359);d=md5ii(d,a,b,c,M[i+15],10,-30611744);c=md5ii(c,d,a,b,M[i+6],15,-1560198380);b=md5ii(b,c,d,a,M[i+13],21,1309151649);
-      a=md5ii(a,b,c,d,M[i+4],6,-145523070);d=md5ii(d,a,b,c,M[i+11],10,-1120210379);c=md5ii(c,d,a,b,M[i+2],15,718787259);b=md5ii(b,c,d,a,M[i+9],21,-343485551);
-      a=safeAdd(a,oA);b=safeAdd(b,oB);c=safeAdd(c,oC);d=safeAdd(d,oD);
-    }
-    return [a,b,c,d].map(n=>(n<0?n+0x100000000:n).toString(16).padStart(8,'0').match(/.{2}/g).reverse().join('')).join('');
-  }
-
-  // ── Timer logic ───────────────────────────────────────────────
+  // ── Timer ─────────────────────────────────────────────────────
   function fmt(s) {
     return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
   }
@@ -472,8 +411,8 @@
     fill.classList.toggle('danger', isDanger);
     glow.classList.toggle('danger', isDanger);
     if (remaining <= 0) {
-      msg.classList.add('show');
       clearInterval(localInterval);
+      msg.classList.add('show');
       navigator.vibrate && navigator.vibrate([300,100,300]);
     }
   }
@@ -489,25 +428,30 @@
     }, 500);
   }
 
-  // ── Admin actions ─────────────────────────────────────────────
-  async function adminToggle() {
+  // ── Admin ─────────────────────────────────────────────────────
+  function adminToggle() {
     if (paused) {
-      // Resume
       const newTs = Date.now() - (TOTAL - pausedRem) * 1000;
-      await pusherTrigger('start', { startTs: newTs });
+      const evt = { action: 'start', startTs: newTs };
+      sendEvent(evt);
+      handleTimerEvent(evt);
     } else if (startTs) {
-      // Pause
       const elapsed = Math.floor((Date.now() - startTs) / 1000);
       const rem = Math.max(0, TOTAL - elapsed);
-      await pusherTrigger('pause', { remaining: rem });
+      const evt = { action: 'pause', remaining: rem };
+      sendEvent(evt);
+      handleTimerEvent(evt);
     } else {
-      // Fresh start
-      await pusherTrigger('start', { startTs: Date.now() });
+      const evt = { action: 'start', startTs: Date.now() };
+      sendEvent(evt);
+      handleTimerEvent(evt);
     }
   }
 
-  async function adminReset() {
-    await pusherTrigger('reset');
+  function adminReset() {
+    const evt = { action: 'reset' };
+    sendEvent(evt);
+    handleTimerEvent(evt);
   }
 
   // ── Panel ─────────────────────────────────────────────────────
