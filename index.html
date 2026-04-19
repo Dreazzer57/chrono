@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Chrono 15 min</title>
-<script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+<script src="https://cdn.ably.com/lib/ably.min-1.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500&display=swap');
 
@@ -304,16 +304,16 @@
 </div>
 
 <script>
-  const SECRET         = "280598";
-  const TOTAL          = 15 * 60;
-  const PUSHER_KEY     = "9a22598565bd4c97290f";
-  const PUSHER_CLUSTER = "eu";
+  const SECRET   = "280598";
+  const TOTAL    = 15 * 60;
+  const ABLY_KEY = "c-eHOA.mMcxTw:g1nbSAwqH5O8Br2XdMSv_lxMKczENG7SLs4bLKYfJ4o";
 
   let localInterval = null;
   let isAdmin       = false;
   let startTs       = null;
   let paused        = false;
   let pausedRem     = null;
+  let ablyChannel   = null;
 
   const display       = document.getElementById('timerDisplay');
   const fill          = document.getElementById('progressFill');
@@ -329,42 +329,34 @@
   const statusDot     = document.getElementById('statusDot');
   const statusText    = document.getElementById('statusText');
 
-  // ── Pusher (presence channel for client events) ───────────────
-  const pusher = new Pusher(PUSHER_KEY, {
-    cluster: PUSHER_CLUSTER,
-    forceTLS: true,
-    // Presence channel auth — on utilise un token statique public
-    // car c'est un usage non-sensible (contrôle de chrono)
-    authEndpoint: null,
-    auth: { params: { user_id: Math.random().toString(36).slice(2) } },
-    userAuthentication: {
-      endpoint: '/pusher/auth',
-      transport: 'ajax'
-    },
-    channelAuthorization: {
-      endpoint: '/pusher/auth',
-      transport: 'ajax'
-    }
-  });
+  // ── Ably setup ────────────────────────────────────────────────
+  const ably = new Ably.Realtime({ key: ABLY_KEY });
 
-  // On utilise un channel public avec client events activés
-  // Les client events sur channel public nécessitent le préfixe "client-"
-  const channel = pusher.subscribe('chrono-sync');
-
-  pusher.connection.bind('connected', () => {
+  ably.connection.on('connected', () => {
     statusDot.classList.add('connected');
     statusText.textContent = 'Connecté';
   });
-  pusher.connection.bind('disconnected', () => {
+  ably.connection.on('disconnected', () => {
     statusDot.classList.remove('connected');
     statusText.textContent = 'Déconnecté';
   });
-  pusher.connection.bind('error', (err) => {
-    console.error('Pusher error', err);
+  ably.connection.on('failed', () => {
+    statusText.textContent = 'Erreur connexion';
   });
 
-  channel.bind('client-timer', (data) => {
-    handleTimerEvent(data);
+  ablyChannel = ably.channels.get('chrono-channel');
+
+  // Écouter les événements timer
+  ablyChannel.subscribe('timer', (message) => {
+    handleTimerEvent(message.data);
+  });
+
+  // Récupérer le dernier état au chargement (history)
+  ablyChannel.history({ limit: 1 }, (err, page) => {
+    if (!err && page.items.length > 0) {
+      const last = page.items[0];
+      if (last.name === 'timer') handleTimerEvent(last.data);
+    }
   });
 
   function handleTimerEvent(data) {
@@ -394,8 +386,7 @@
   }
 
   function sendEvent(data) {
-    // client events : canal doit être souscrit et connecté
-    channel.trigger('client-timer', data);
+    ablyChannel.publish('timer', data);
   }
 
   // ── Timer ─────────────────────────────────────────────────────
@@ -432,26 +423,18 @@
   function adminToggle() {
     if (paused) {
       const newTs = Date.now() - (TOTAL - pausedRem) * 1000;
-      const evt = { action: 'start', startTs: newTs };
-      sendEvent(evt);
-      handleTimerEvent(evt);
+      sendEvent({ action: 'start', startTs: newTs });
     } else if (startTs) {
       const elapsed = Math.floor((Date.now() - startTs) / 1000);
       const rem = Math.max(0, TOTAL - elapsed);
-      const evt = { action: 'pause', remaining: rem };
-      sendEvent(evt);
-      handleTimerEvent(evt);
+      sendEvent({ action: 'pause', remaining: rem });
     } else {
-      const evt = { action: 'start', startTs: Date.now() };
-      sendEvent(evt);
-      handleTimerEvent(evt);
+      sendEvent({ action: 'start', startTs: Date.now() });
     }
   }
 
   function adminReset() {
-    const evt = { action: 'reset' };
-    sendEvent(evt);
-    handleTimerEvent(evt);
+    sendEvent({ action: 'reset' });
   }
 
   // ── Panel ─────────────────────────────────────────────────────
